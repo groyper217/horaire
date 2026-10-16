@@ -284,7 +284,8 @@
       <p class="hint">${t('gs_intro')}</p>
       <ol class="steps">
         <li><b>${t('gs_1')}</b><span>${t('gs_1b')}</span>
-          <button class="btn primary" data-action="add-emp">${t('addFirst')}</button></li>
+          <button class="btn primary" data-action="import">${t('importFromWfm')}</button>
+          <button class="link" data-action="add-emp">${t('gs_1manual')}</button></li>
         <li><b>${t('gs_2')}</b><span>${t('gs_2b')}</span>
           <button class="btn" data-action="tab" data-tab="needs">${t('gs_2btn')}</button></li>
         <li><b>${t('gs_3')}</b><span>${t('gs_3b')}</span></li>
@@ -793,6 +794,7 @@
       <div class="toolbar">
         <div class="search"><input id="team-search" type="search" placeholder="${t('searchName')}" aria-label="${t('searchName')}"
           value="${esc(ui.teamSearch)}" autocomplete="off" autocorrect="off"></div>
+        <button class="btn" data-action="import">${t('importBtn')}</button>
         <button class="btn primary" data-action="add-emp">${t('addPerson')}</button>
       </div>
       <ul id="emp-list" class="emp-list">${empList()}</ul>`;
@@ -924,6 +926,64 @@
     closeSheet();
     render();
     toast(t('saved'));
+  }
+
+  // ---------- import a team list ----------
+  let importPeople = [];
+
+  function openImport() {
+    importPeople = [];
+    openSheet(`<form class="form" id="import-form">
+      <h2>${t('importTitle')}</h2>
+      <p class="hint">${t('importHint')}</p>
+      <ol class="import-steps">${['import_1', 'import_2', 'import_3'].map(k => `<li>${t(k)}</li>`).join('')}</ol>
+      <label class="field">${t('importPaste')}
+        <textarea id="import-text" rows="6" placeholder="${esc(t('importExample'))}" autocomplete="off" autocorrect="off" spellcheck="false"></textarea></label>
+      <label class="btn">${t('importFile')}<input type="file" id="import-file" accept=".csv,.txt,text/csv,text/plain" hidden></label>
+      <div id="import-preview" class="msg"></div>
+      <div class="btns sticky"><span class="spacer"></span>
+        <button type="button" class="btn" data-action="close">${t('cancel')}</button>
+        <button type="submit" class="btn primary" id="import-go" disabled>${t('importGo', { n: 0 })}</button></div>
+    </form>`);
+  }
+
+  function updateImportPreview() {
+    const { people, notes } = H.parseTeamList($('#import-text').value, state.employees);
+    importPeople = people;
+    const days = t('daysShort');
+    const avail = p => (p.availability.every(r => r.length === 1 && r[0].start === 0 && r[0].end >= H.DAY)
+      ? t('availAll') : days.filter((_, i) => p.availability[i].length).join(' ') || t('av_none'));
+    const shown = people.slice(0, 40);
+    $('#import-preview').innerHTML = !people.length && !notes.duplicates.length ? '' : `
+      ${people.length ? `<div class="import-table"><table>
+        <thead><tr><th>${t('name')}</th><th>${t('stations')}</th><th>${t('maxShort')}</th><th>${t('availability')}</th></tr></thead>
+        <tbody>${shown.map(p => `<tr><td>${esc(p.name)}</td>
+          <td>${p.stations.map(s => `<i class="badge ${s}">${t(s)}</i>`).join(' ')}</td>
+          <td>${p.maxHours} h</td><td>${avail(p)}</td></tr>`).join('')}</tbody></table></div>
+        ${people.length > shown.length ? `<p class="hint">${t('importMore', { n: people.length - shown.length })}</p>` : ''}` : ''}
+      ${notes.stationGuessed ? `<p class="warn">${t('importStationGuess', { n: notes.stationGuessed })}</p>` : ''}
+      ${notes.duplicates.length ? `<p class="hint">${t('importDup', { n: notes.duplicates.length })}</p>` : ''}`;
+    const go = $('#import-go');
+    go.disabled = !people.length;
+    go.textContent = t('importGo', { n: people.length });
+  }
+
+  async function readImportFile(file) {
+    if (!file) return;
+    $('#import-text').value = await file.text();
+    updateImportPreview();
+  }
+
+  function doImport() {
+    if (!importPeople.length) return;
+    state.employees = [...state.employees, ...importPeople];
+    const n = importPeople.length;
+    importPeople = [];
+    save();
+    closeSheet();
+    ui.tab = 'team';
+    render();
+    toast(t('importDone', { n }));
   }
 
   function deleteEmp(id) {
@@ -1156,6 +1216,7 @@
       updateBoard();
     },
     'add-emp': () => openEmpEditor(null),
+    import: openImport,
     'edit-emp': el => openEmpEditor(el.dataset.id),
     'delete-emp': el => deleteEmp(el.dataset.id),
     'av-add': el => el.insertAdjacentHTML('beforebegin', rangeRow({ start: 6 * 60, end: 14 * 60 })),
@@ -1210,12 +1271,14 @@
     e.preventDefault();
     if (e.target.id === 'shift-form') submitShift(e.target);
     else if (e.target.id === 'emp-form') submitEmp(e.target);
+    else if (e.target.id === 'import-form') doImport();
   });
 
   document.addEventListener('input', e => {
     const el = e.target;
     if (el.id === 'search') { ui.search = el.value; updateBoard(); showSuggest(); }
     else if (el.id === 'team-search') { ui.teamSearch = el.value; $('#emp-list').innerHTML = empList(); }
+    else if (el.id === 'import-text') updateImportPreview();
     else if (el.closest('#shift-form')) refreshShiftForm();
   });
 
@@ -1234,6 +1297,7 @@
     else if (el.closest('.tpl-row')) updateTpl(el);
     else if (el.dataset.setting) updateSetting(el);
     else if (el.id === 'restore-file') restore(el.files[0]);
+    else if (el.id === 'import-file') readImportFile(el.files[0]);
   });
 
   document.addEventListener('focusout', e => {

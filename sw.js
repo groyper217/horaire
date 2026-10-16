@@ -1,5 +1,5 @@
 // Offline support. Network first (so updates arrive right away), cache as fallback.
-const CACHE = 'horaire-v5';
+const CACHE = 'horaire-v6';
 const FILES = ['./', 'index.html', 'styles.css', 'logic.js', 'i18n.js', 'app.js', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 

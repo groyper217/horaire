@@ -369,6 +369,113 @@
     return { shifts, dropped };
   }
 
+  // ---------- import a team list (pasted from WFM/Excel, or a CSV file) ----------
+  const foldText = s => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+  const DAY_WORDS = [['lun', 'mon'], ['mar', 'tue'], ['mer', 'wed'], ['jeu', 'thu'], ['ven', 'fri'], ['sam', 'sat'], ['dim', 'sun']];
+
+  function splitRows(text) {
+    const lines = String(text).replace(/\r/g, '').split('\n').filter(l => l.trim());
+    const delim = lines.some(l => l.includes('\t')) ? '\t'
+      : lines.filter(l => l.includes(';')).length > lines.filter(l => l.includes(',')).length ? ';' : ',';
+    return lines.map(line => {
+      const cells = [];
+      let cur = '', quoted = false;
+      for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (c === '"') { if (quoted && line[i + 1] === '"') { cur += '"'; i++; } else quoted = !quoted; }
+        else if (c === delim && !quoted) { cells.push(cur.trim()); cur = ''; }
+        else cur += c;
+      }
+      cells.push(cur.trim());
+      return cells;
+    });
+  }
+
+  // What each header column means, or null if the first row isn't a header.
+  function readHeader(row) {
+    const map = {};
+    row.forEach((cell, i) => {
+      const h = foldText(cell);
+      if (!h) return;
+      const day = DAY_WORDS.findIndex(ws => ws.some(w => h.startsWith(w)));
+      if (/prenom|first/.test(h)) map.first = i;
+      else if (/famille|last|surname/.test(h)) map.last = i;
+      else if (/poste|station|position|role/.test(h)) map.station = i;
+      else if (/min/.test(h)) map.min = i;
+      else if (/max|heure|hour/.test(h)) map.max = i;
+      else if (/^(nom|name|employe|employee|equipier)/.test(h)) map.name = i;
+      else if (day >= 0 && h.length <= 9) (map.days = map.days || [])[day] = i;
+    });
+    // A real header names the person column, or lists several days ("Marc" alone is a name, not "Mardi").
+    const days = (map.days || []).filter(x => x != null).length;
+    return map.name != null || map.first != null || map.last != null || days >= 2 ? map : null;
+  }
+
+  function readStations(v) {
+    const s = foldText(v);
+    const k = /cuis|kitchen|grill|cook|prep/.test(s), f = /devant|front|caisse|comptoir|counter|service|drive|cash/.test(s);
+    if (/deux|both|tous|all/.test(s) || (k && f)) return ['kitchen', 'front'];
+    return k ? ['kitchen'] : f ? ['front'] : null;
+  }
+
+  // "6-14", "6h-14h", "16:00 - 23:00", "oui", "non" → availability ranges for one day.
+  function readDay(v) {
+    const s = foldText(v);
+    if (!s || /^(non|no|n|x|-|indispo|off|ferme)$/.test(s)) return [];
+    const m = s.match(/(\d{1,2})(?:[h:](\d{2}))?\s*h?\s*(?:-|–|a|to)\s*(\d{1,2})(?:[h:](\d{2}))?/);
+    if (m) {
+      const a = +m[1] * 60 + (+m[2] || 0);
+      let b = +m[3] * 60 + (+m[4] || 0);
+      if (b <= a) b += DAY;
+      return [{ start: a, end: b }];
+    }
+    return [{ start: 0, end: DAY }];   // "oui", "dispo", "toute la journée", ✓ …
+  }
+
+  // Returns { people, notes } without changing anything; the screen shows a preview first.
+  function parseTeamList(text, existing = []) {
+    const rows = splitRows(text);
+    const notes = { stationGuessed: 0, duplicates: [] };
+    if (!rows.length) return { people: [], notes };
+    const head = readHeader(rows[0]);
+    const body = head ? rows.slice(1) : rows;
+    const taken = new Set(existing.map(e => foldText(e.name)));
+    const people = [];
+    for (const r of body) {
+      let name;
+      if (head) {
+        const first = head.first != null ? r[head.first] : '';
+        const last = head.last != null ? r[head.last] : (head.first != null && head.name != null ? r[head.name] : '');
+        name = first || last ? `${first} ${last}` : r[head.name ?? 0];
+      } else if (r.length === 2 && /^[^\d]+$/.test(r[0]) && /^[^\d]+$/.test(r[1]) && !readStations(r[1])) {
+        name = `${r[1]} ${r[0]}`;          // "Tremblay, Alexandre" → "Alexandre Tremblay"
+      } else {
+        name = r[0];
+      }
+      name = String(name || '').replace(/\s+/g, ' ').trim()
+        .replace(/^([^,]+),\s*([^,]+)$/, '$2 $1');   // "Roy, Marc" → "Marc Roy"
+      if (!name || /^\d+$/.test(name)) continue;
+      if (taken.has(foldText(name))) { notes.duplicates.push(name); continue; }
+      taken.add(foldText(name));
+
+      const stationText = head && head.station != null ? r[head.station] : r.slice(1).find(readStations);
+      let stations = stationText ? readStations(stationText) : null;
+      if (!stations) { stations = ['kitchen', 'front']; notes.stationGuessed++; }
+      const maxCell = head && head.max != null ? parseFloat(String(r[head.max]).replace(',', '.')) : NaN;
+      const minCell = head && head.min != null ? parseFloat(String(r[head.min]).replace(',', '.')) : NaN;
+      let availability = [0, 1, 2, 3, 4, 5, 6].map(() => [{ start: 0, end: DAY }]);
+      if (head && head.days && head.days.some(i => i != null && r[i])) {
+        availability = [0, 1, 2, 3, 4, 5, 6].map(d => (head.days[d] != null ? readDay(r[head.days[d]]) : [{ start: 0, end: DAY }]));
+      }
+      people.push(normEmp({
+        name, stations, availability,
+        maxHours: Number.isFinite(maxCell) ? maxCell : 40,
+        minHours: Number.isFinite(minCell) ? minCell : 0,
+      }));
+    }
+    return { people, notes };
+  }
+
   // ---------- fake team for trying the app ----------
   function demoTeam(seed = 7) {
     let x = seed;
@@ -418,6 +525,7 @@
     addDays, mondayOf, parseIso, isoOf, toMin, toHHMM, span, hours, absOf, uid,
     defaultState, defaultStaffing, migrate, normEmp, findEmp, weekShifts, weekHours, byName,
     availIntervals, timeOffHit, check, coverage, gapsOf, generate, replacements, weekIssues, copyWeek, demoTeam,
+    parseTeamList,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Horaire = api;
