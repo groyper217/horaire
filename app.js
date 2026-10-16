@@ -109,21 +109,21 @@
   }
 
   // ---------- schedule tab ----------
+  // Order on the page = order of importance: where am I, what's wrong,
+  // the one main action, then the schedule itself. Rare actions sit at the bottom.
   function scheduleTab() {
-    const is = ui.issues;
-    const count = k => is.items.filter(i => i.kind === k).length;
-    const parts = [];
-    if (count('block')) parts.push(t('nConflicts', { n: count('block') }));
-    if (is.gaps.length) parts.push(t('nGaps', { n: is.gaps.length }));
-    if (count('open')) parts.push(t('nOpen', { n: count('open') }));
-    if (count('warn')) parts.push(t('nWarns', { n: count('warn') }));
-    const bad = count('block') || is.gaps.length || count('open');
-    const empty = !state.employees.length;
+    if (!state.employees.length) return gettingStarted();
+    const hasShifts = shiftsOf().length > 0;
+    const otherWeek = ui.week !== H.mondayOf(new Date());
     return `
-      ${backupBanner()}
-      ${empty ? `<div class="empty card"><p>${t('noTeamYet')}</p><div class="btns">
-        <button class="btn primary" data-action="add-emp">${t('addFirst')}</button>
-        <button class="btn" data-action="demo">${t('loadDemo')}</button></div></div>` : ''}
+      ${otherWeek ? `<div class="notice">${t('otherWeek')} <button class="link" data-action="week-today">${t('backToThisWeek')}</button></div>` : ''}
+      ${statusCard()}
+      <button class="btn primary big" data-action="generate">${hasShifts ? t('generateFill') : t('generate')}</button>
+      <div class="actions-row">
+        <button class="btn" data-action="add-shift">${t('addShift')}</button>
+        <button class="btn" data-action="copy-week">${t('copyLastWeekShort')}</button>
+        <button class="btn" data-action="share">${t('share')}</button>
+      </div>
       <div class="toolbar">
         <div class="seg" role="group" aria-label="${t('view')}">
           <button data-action="view" data-v="day" aria-pressed="${ui.view === 'day'}">${t('day')}</button>
@@ -135,17 +135,74 @@
           <ul id="suggest" class="suggest" hidden></ul>
         </div>
       </div>
-      <div class="actions">
-        <button class="btn primary" data-action="generate">${t('generate')}</button>
-        <button class="btn" data-action="add-shift">${t('addShift')}</button>
-        <button class="btn" data-action="more">${t('more')}</button>
-      </div>
-      <button class="issues-bar ${bad ? 'bad' : parts.length ? 'meh' : 'good'}" data-action="issues">
-        ${parts.length ? parts.join(' · ') : t('allGood')}<span aria-hidden="true">›</span>
-      </button>
       ${ui.view === 'day' ? dayChips() : ''}
+      <div class="legend-row">
+        <span><i class="sw kitchen"></i>${t('kitchen')}</span><span><i class="sw front"></i>${t('front')}</span>
+        <button class="link" data-action="help">${t('whatsThis')}</button>
+      </div>
       <div id="board">${board()}</div>
-      <p class="legend">${t('legend')}</p>`;
+      <p class="hint center">${ui.view === 'day' ? t('tapShiftHint') : t('tapCellHint')}</p>
+      ${backupBanner()}
+      ${hasShifts ? `<p class="center"><button class="link danger" data-action="clear-week">${t('clearWeek')}</button></p>` : ''}`;
+  }
+
+  // Plain-language summary of the week, big enough to be the first thing read.
+  function statusCard() {
+    if (!shiftsOf().length) {
+      return `<div class="status neutral"><b>${t('st_emptyTitle')}</b><span>${t('st_emptyBody')}</span></div>`;
+    }
+    const is = ui.issues;
+    const count = k => is.items.filter(i => i.kind === k).length;
+    const lines = [];
+    if (count('block')) lines.push(t('st_conflicts', { n: count('block') }));
+    if (is.gaps.length) lines.push(t('st_gaps', { n: is.gaps.length }));
+    if (count('open')) lines.push(t('st_open', { n: count('open') }));
+    const bad = lines.length > 0;
+    if (count('warn')) lines.push(t('st_warns', { n: count('warn') }));
+    if (!lines.length) {
+      return `<button class="status good" data-action="issues"><b>${t('st_goodTitle')}</b><span>${t('st_goodBody')}</span></button>`;
+    }
+    return `<button class="status ${bad ? 'bad' : 'meh'}" data-action="issues">
+      <b>${bad ? t('st_badTitle') : t('st_warnTitle')}</b>
+      <ul>${lines.map(l => `<li>${l}</li>`).join('')}</ul>
+      <span class="go">${t('st_seeFix')} ›</span></button>`;
+  }
+
+  // Empty app: a numbered path instead of an empty grid full of red.
+  function gettingStarted() {
+    return `<section class="card onboard">
+      <h2>${t('gs_title')}</h2>
+      <p class="hint">${t('gs_intro')}</p>
+      <ol class="steps">
+        <li><b>${t('gs_1')}</b><span>${t('gs_1b')}</span>
+          <button class="btn primary" data-action="add-emp">${t('addFirst')}</button></li>
+        <li><b>${t('gs_2')}</b><span>${t('gs_2b')}</span>
+          <button class="btn" data-action="tab" data-tab="needs">${t('gs_2btn')}</button></li>
+        <li><b>${t('gs_3')}</b><span>${t('gs_3b')}</span></li>
+      </ol>
+    </section>
+    <section class="card"><p class="hint">${t('gs_demo')}</p>
+      <button class="btn" data-action="demo">${t('loadDemo')}</button></section>`;
+  }
+
+  function openHelp() {
+    const row = (sample, text) => `<li><span class="help-sample">${sample}</span><span>${text}</span></li>`;
+    openSheet(`<div class="form"><h2>${t('helpTitle')}</h2>
+      <h3>${t('helpColors')}</h3>
+      <ul class="help-list">
+        ${row(`<span class="chip kitchen">6h–14h</span>`, t('help_kitchen'))}
+        ${row(`<span class="chip front">6h–14h</span>`, t('help_front'))}
+        ${row(`<span class="chip kitchen">9h–17h ↻</span>`, t('help_regular'))}
+        ${row(`<span class="chip front blocked">6h–14h</span>`, t('help_blocked'))}
+        ${row(`<span class="chip front forced">6h–14h</span>`, t('help_forced'))}
+        ${row(`<span class="chip front open">6h–14h</span>`, t('help_open'))}
+        ${row(`<span class="cov-sample short">2/3</span>`, t('help_short'))}
+        ${row(`<span class="cov-sample ok">3/3</span>`, t('help_ok'))}
+        ${row(`<span class="dot-sample"></span>`, t('help_dot'))}
+      </ul>
+      <h3>${t('helpHow')}</h3>
+      <ul class="plain how">${['how_1', 'how_2', 'how_3', 'how_4', 'how_5'].map(k => `<li>${t(k)}</li>`).join('')}</ul>
+      <div class="btns"><span class="spacer"></span><button class="btn primary" data-action="close">${t('gotIt')}</button></div></div>`);
   }
 
   function backupBanner() {
@@ -255,9 +312,10 @@
           const iso = H.addDays(ui.week, i);
           const off = e.timeOff.some(o => o.from <= iso && iso <= o.to);
           const na = !e.availability[i].length;
+          const mine = shifts.filter(s => s.empId === e.id && s.day === i);
           return `<td class="cell ${off ? 'off' : na ? 'na' : ''}" data-action="add-shift" data-emp="${e.id}" data-day="${i}">
             ${off ? `<span class="tag">${t('timeOffShort')}</span>` : ''}
-            ${shifts.filter(s => s.empId === e.id && s.day === i).map(chip).join('')}</td>`;
+            ${mine.map(chip).join('')}${!mine.length && !off && !na ? '<span class="plus" aria-hidden="true">+</span>' : ''}</td>`;
         }).join('')}
         <td class="tot ${h > e.maxHours ? 'bad' : ''}">${fmtH(h)}<small>/${e.maxHours}</small></td></tr>`;
     }
@@ -316,13 +374,14 @@
           ${H.STATIONS.map(st => `<label><input type="radio" name="station" value="${st}" ${sh.station === st ? 'checked' : ''}><span>${t(st)}</span></label>`).join('')}
         </div></fieldset>
         <div id="shift-msg" class="msg">${shiftMessages(sh)}</div>
-        <div class="btns">
-          ${existing ? `<button type="button" class="btn danger" data-action="delete-shift" data-id="${sh.id}">${t('delete')}</button>
-            <button type="button" class="btn" data-action="replace" data-id="${sh.id}">${existing.empId ? t('replace') : t('findSomeone')}</button>
-            ${existing.empId ? `<button type="button" class="btn" data-action="make-open" data-id="${sh.id}">${t('makeOpen')}</button>` : ''}` : ''}
-          <span class="spacer"></span>
-          <button type="button" class="btn" data-action="close">${t('cancel')}</button>
+        <div class="stack">
           <button type="submit" class="btn primary" id="shift-save">${t('save')}</button>
+          ${existing ? `<button type="button" class="btn" data-action="replace" data-id="${sh.id}">${existing.empId ? t('replaceSomeone') : t('findSomeone')}</button>` : ''}
+        </div>
+        <div class="btns">
+          ${existing ? `<button type="button" class="link danger" data-action="delete-shift" data-id="${sh.id}">${t('deleteShift')}</button>` : ''}
+          <span class="spacer"></span>
+          <button type="button" class="link" data-action="close">${t('cancel')}</button>
         </div>
       </form>`);
   }
@@ -397,6 +456,8 @@
         : `<p class="err">${t('noReplacement')}</p>`}
       ${no.length ? `<details><summary>${t('notEligible', { n: no.length })}</summary><ul class="plain">
         ${no.map(r => `<li><b>${esc(r.emp.name)}</b> — ${r.blocks.map(reason).join(' · ')}</li>`).join('')}</ul></details>` : ''}
+      ${sh.empId ? `<div class="leave-open"><p class="hint">${t('leaveOpenHint')}</p>
+        <button class="btn" data-action="make-open" data-id="${id}">${t('leaveOpen')}</button></div>` : ''}
       <div class="btns"><span class="spacer"></span><button class="btn" data-action="close">${t('close')}</button></div>
     </div>`);
   }
@@ -472,16 +533,19 @@
       ${report.gaps.length ? `<h3>${t('gapsLeft')}</h3><p class="hint">${t('gapsExplain')}</p><ul class="issues">${report.gaps.map(g => `<li class="err-li">${t('gapLine', {
           day: t('daysShort')[gapDay(g)], range: fmtRange(g.start, g.end), station: t(g.station), n: g.missing })}</li>`).join('')}</ul>`
         : `<p class="ok">${t('noGaps')}</p>`}
-      <div class="btns"><button class="btn" data-action="undo">${t('undo')}</button><span class="spacer"></span>
-        <button class="btn primary" data-action="close">${t('ok')}</button></div></div>`);
+      <h3>${t('nextSteps')}</h3>
+      <div class="stack">
+        ${report.gaps.length ? `<button class="btn primary" data-action="issues">${t('seeProblems')}</button>` : ''}
+        <button class="btn ${report.gaps.length ? '' : 'primary'}" data-action="share">${t('shareSchedule')}</button>
+      </div>
+      <div class="btns"><button class="link" data-action="undo">${t('undoGenerate')}</button><span class="spacer"></span>
+        <button class="link" data-action="close">${t('close')}</button></div></div>`);
   }
 
-  function openMore() {
-    openSheet(`<div class="form"><h2>${t('more')}</h2><div class="stack">
-      <button class="btn" data-action="copy-week">${t('copyLastWeek')}</button>
-      <button class="btn" data-action="export-image">${t('exportImage')}</button>
+  function openShare() {
+    openSheet(`<div class="form"><h2>${t('shareTitle')}</h2><p class="hint">${t('shareHint')}</p><div class="stack">
+      <button class="btn primary" data-action="export-image">${t('exportImage')}</button>
       <button class="btn" data-action="print">${t('printPdf')}</button>
-      <button class="btn danger" data-action="clear-week">${t('clearWeek')}</button>
       <button class="btn" data-action="close">${t('cancel')}</button></div></div>`);
   }
 
@@ -590,7 +654,8 @@
 
   // ---------- team tab ----------
   function teamTab() {
-    return `<div class="toolbar">
+    return `<p class="hint pad">${t('teamIntro')}</p>
+      <div class="toolbar">
         <div class="search"><input id="team-search" type="search" placeholder="${t('searchName')}" aria-label="${t('searchName')}"
           value="${esc(ui.teamSearch)}" autocomplete="off" autocorrect="off"></div>
         <button class="btn primary" data-action="add-emp">${t('addPerson')}</button>
@@ -913,15 +978,17 @@
       const sh = shiftsOf().find(s => s.id === el.dataset.id);
       remember();
       upsertShift({ ...sh, empId: null, forced: undefined });
+      closeSheet();
       render();
-      openReplace(sh.id);
+      toast(t('leftOpen'), true);
     },
     replace: el => openReplace(el.dataset.id),
     assign: el => assign(el.dataset.id, el.dataset.emp),
     issues: openIssues,
     'gap-fill': fillGap,
     'goto-day': el => { closeSheet(); ui.view = 'day'; ui.day = +el.dataset.d; render(); },
-    more: openMore,
+    share: () => { closeSheet(); openShare(); },
+    help: openHelp,
     'copy-week': copyLastWeek,
     'clear-week': clearWeek,
     'export-image': exportImage,
