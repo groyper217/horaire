@@ -18,7 +18,11 @@
     week: H.mondayOf(now),
     day: (now.getDay() + 6) % 7,
     view: 'day',   // always open on today's day view
+    station: 'kitchen',   // which station the day view shows
     search: '',
+    searchOpen: false,
+    short: new Map(),
+    boardKey: '',
     teamSearch: '',
     undo: null,
     issues: null,
@@ -36,7 +40,33 @@
   const fmtH = h => String(Math.round(h * 10) / 10).replace('.', state.settings.lang === 'fr' ? ',' : '.') + ' h';
   const fmtDate = (iso, opts = { day: 'numeric', month: 'short' }) => H.parseIso(iso).toLocaleDateString(locale(), opts);
   const weekLabel = () => fmtDate(ui.week) + ' – ' + fmtDate(H.addDays(ui.week, 6));
+  // "12–18 oct." when the week stays in one month, to fit the header on a phone.
+  function weekLabelShort() {
+    const a = H.parseIso(ui.week), end = H.addDays(ui.week, 6);
+    return a.getMonth() === H.parseIso(end).getMonth() ? `${a.getDate()}–${fmtDate(end)}` : weekLabel();
+  }
   const empName = id => (H.findEmp(state, id) || {}).name || '?';
+
+  // "Alexandre Tremblay" → "Alexandre T.", unless two people would look the same.
+  function shortNames() {
+    const short = n => { const w = n.trim().split(/\s+/); return w.length > 1 ? `${w[0]} ${w[w.length - 1][0]}.` : n; };
+    const count = {};
+    state.employees.forEach(e => { const s = short(e.name); count[s] = (count[s] || 0) + 1; });
+    return new Map(state.employees.map(e => [e.id, count[short(e.name)] > 1 ? e.name : short(e.name)]));
+  }
+  const shortName = id => ui.short.get(id) || empName(id);
+
+  // Assigned vs wanted hours, shown under a name: "24 h / 32 h" plus a bar.
+  // Quiet when fine; orange under their minimum, red over their max.
+  function hoursInfo(e, h) {
+    if (!e) return '';
+    const cls = h > e.maxHours ? 'over' : h < e.minHours ? 'under' : 'fine';
+    const pct = e.maxHours ? Math.min(100, (h / e.maxHours) * 100) : 0;
+    const minMark = e.minHours && e.maxHours ? `<b style="left:${Math.min(100, (e.minHours / e.maxHours) * 100)}%"></b>` : '';
+    const label = `${fmtH(h)} / ${e.maxHours} h` + (cls === 'under' ? ` · ${t('hrsMin', { min: e.minHours })}` : '');
+    return `<span class="hrs ${cls}" title="${esc(t('hrsTitle', { h: fmtH(h), max: e.maxHours, min: e.minHours }))}">
+      <span>${label}</span><span class="hrs-bar"><i style="width:${pct}%"></i>${minMark}</span></span>`;
+  }
 
   function reason(b) {
     const p = { ...b };
@@ -86,20 +116,61 @@
 
   function render() {
     document.documentElement.lang = state.settings.lang;
-    if (ui.tab === 'schedule') ui.issues = H.weekIssues(state, ui.week);
+    if (ui.tab === 'schedule') {
+      ui.issues = H.weekIssues(state, ui.week);
+      ui.short = shortNames();
+    }
     const body = { schedule: scheduleTab, team: teamTab, needs: needsTab, settings: settingsTab }[ui.tab]();
+    const prevLeft = ($('.gantt') || {}).scrollLeft;
     $('#app').innerHTML = header() + `<main id="main">${body}</main>` + nav();
+    placeTimeline(prevLeft);
   }
 
+  // Day view: keep the scroll position while working on the same day; on a
+  // newly opened day, start at the current hour (today) or at 6h.
+  function placeTimeline(prevLeft) {
+    const g = $('.gantt');
+    if (!g) { ui.boardKey = ''; return; }
+    const key = ui.week + ui.day + ui.station;
+    if (key === ui.boardKey && prevLeft != null) { g.scrollLeft = prevLeft; return; }
+    ui.boardKey = key;
+    const isToday = H.addDays(ui.week, ui.day) === H.isoOf(new Date());
+    const n = new Date();
+    scrollTimeline(isToday ? n.getHours() * 60 - 60 : 6 * 60);
+  }
+
+  function scrollTimeline(min) {
+    const g = $('.gantt');
+    if (g) g.scrollLeft = Math.max(0, (min - +g.dataset.ws) / 60 * HOUR_PX);
+  }
+
+  const searchIcon = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>';
+
+  // Schedule header: week, Day/Week switch and search all on one line, so the
+  // schedule itself starts higher on the screen.
   function header() {
-    const centre = ui.tab === 'schedule'
-      ? `<div class="weeknav">
-          <button class="icon-btn" data-action="week" data-d="-7" aria-label="${t('prevWeek')}">‹</button>
-          <button class="weeklabel" data-action="week-today" title="${t('thisWeek')}">${weekLabel()}</button>
-          <button class="icon-btn" data-action="week" data-d="7" aria-label="${t('nextWeek')}">›</button>
-        </div>`
-      : `<h1 class="title">${t('tab_' + ui.tab)}</h1>`;
-    return `<header class="top"><span class="brand">${t('appName')}</span>${centre}</header>`;
+    if (ui.tab !== 'schedule') {
+      return `<header class="top"><span class="brand">${t('appName')}</span><h1 class="title">${t('tab_' + ui.tab)}</h1></header>`;
+    }
+    const weeknav = `<div class="weeknav">
+        <button class="icon-btn" data-action="week" data-d="-7" aria-label="${t('prevWeek')}">‹</button>
+        <button class="weeklabel" data-action="week-today" title="${t('thisWeek')}">${weekLabelShort()}</button>
+        <button class="icon-btn" data-action="week" data-d="7" aria-label="${t('nextWeek')}">›</button>
+      </div>`;
+    if (!state.employees.length) return `<header class="top"><span class="brand">${t('appName')}</span>${weeknav}</header>`;
+    const searching = ui.searchOpen || ui.search;
+    return `<header class="top sched">
+      ${weeknav}
+      <div class="seg small" role="group" aria-label="${t('view')}">
+        <button data-action="view" data-v="day" aria-pressed="${ui.view === 'day'}">${t('day')}</button>
+        <button data-action="view" data-v="week" aria-pressed="${ui.view === 'week'}">${t('week')}</button>
+      </div>
+      <button class="icon-btn search-btn ${searching ? 'on' : ''}" data-action="search-toggle" aria-label="${t('searchName')}" aria-expanded="${!!searching}">${searchIcon}</button>
+      ${searching ? `<div class="search searchbar">
+        <input id="search" type="search" placeholder="${t('searchName')}" aria-label="${t('searchName')}"
+          value="${esc(ui.search)}" autocomplete="off" autocorrect="off" enterkeyhint="search">
+        <ul id="suggest" class="suggest" hidden></ul></div>` : ''}
+    </header>`;
   }
 
   function nav() {
@@ -123,22 +194,9 @@
         <button class="btn" data-action="copy-week">${t('copyLastWeekShort')}</button>
         <button class="btn" data-action="share">${t('share')}</button>
       </div>
-      <div class="toolbar">
-        <div class="seg" role="group" aria-label="${t('view')}">
-          <button data-action="view" data-v="day" aria-pressed="${ui.view === 'day'}">${t('day')}</button>
-          <button data-action="view" data-v="week" aria-pressed="${ui.view === 'week'}">${t('week')}</button>
-        </div>
-        <div class="search">
-          <input id="search" type="search" placeholder="${t('searchName')}" aria-label="${t('searchName')}"
-            value="${esc(ui.search)}" autocomplete="off" autocorrect="off" enterkeyhint="search">
-          <ul id="suggest" class="suggest" hidden></ul>
-        </div>
-      </div>
-      ${ui.view === 'day' ? dayChips() + dayTitle() : ''}
-      <div class="legend-row">
+      ${ui.view === 'day' ? dayChips() + dayBar() : `<div class="legend-row">
         <span><i class="sw kitchen"></i>${t('kitchen')}</span><span><i class="sw front"></i>${t('front')}</span>
-        <button class="link" data-action="help">${t('whatsThis')}</button>
-      </div>
+        <button class="link" data-action="help">${t('whatsThis')}</button></div>`}
       <div id="board">${board()}</div>
       <p class="hint center">${ui.view === 'day' ? t('tapShiftHint') : t('tapCellHint')}</p>
       ${backupBanner()}
@@ -164,10 +222,9 @@
     const open = is.items.filter(i => i.kind === 'open').sort(byTime);
     const total = blocks.length + open.length + is.gaps.length;
 
+    // Week ready: shrink to one line so the schedule gets the space.
     if (!total) {
-      return card('good', t('ns_doneTitle'), `<p>${t('ns_doneBody')}</p>`,
-        `<button class="btn primary big" data-action="share">${t('shareSchedule')}</button>
-         <button class="link" data-action="week" data-d="7">${t('ns_nextWeek')} ›</button>`);
+      return `<button class="next-compact" data-action="share"><span>${t('ns_doneShort')}</span><b>${t('share')} ›</b></button>`;
     }
 
     let problem, buttons;
@@ -183,17 +240,41 @@
       const g = is.gaps[0];
       problem = t('ns_gap', { day: t('days')[gapDayOf(g)], range: fmtRange(g.start, g.end), station: t(g.station), n: g.missing });
       buttons = `<button class="btn primary" data-action="gap-fill" data-start="${g.start}" data-end="${g.end}" data-station="${g.station}">${t('findSomeone')}</button>
-        <button class="btn" data-action="goto-day" data-d="${gapDayOf(g)}">${t('seeDay')}</button>`;
+        <button class="btn" data-action="goto-day" data-d="${gapDayOf(g)}" data-st="${g.station}" data-min="${g.start - gapDayOf(g) * H.DAY}">${t('seeDay')}</button>`;
     }
     return card('bad', t('ns_fixTitle', { n: total }),
-      `<p class="next-first">${t('ns_first')}</p><div class="next-problem">${problem}</div>`,
+      `<div class="next-problem">${problem}</div>`,
       buttons + (total > 1 ? `<button class="link" data-action="issues">${t('ns_seeAll', { n: total })} ›</button>` : ''));
   }
 
-  function dayTitle() {
+  // Things to fix on a day (optionally for one station): gaps, conflicts, open shifts.
+  function problemsOn(d, st) {
+    const is = ui.issues;
+    return is.gaps.filter(g => gapDayOf(g) === d && (!st || g.station === st)).length
+      + is.items.filter(it => (it.kind === 'block' || it.kind === 'open') && it.shift.day === d && (!st || it.shift.station === st)).length;
+  }
+
+  // Day title with jump buttons, then Kitchen | Front tabs.
+  function dayBar() {
     const iso = H.addDays(ui.week, ui.day);
     const isToday = iso === H.isoOf(new Date());
-    return `<h2 class="day-title">${t('days')[ui.day]} ${fmtDate(iso, { day: 'numeric', month: 'long' })}${isToday ? ` <span class="today">${t('today')}</span>` : ''}</h2>`;
+    const jumps = [['jumpMorning', 6], ['jumpEvening', 14], ['jumpNight', 22]];
+    return `<div class="day-bar">
+        <h2 class="day-title">${t('daysShort')[ui.day]} ${fmtDate(iso)}${isToday ? ` <span class="today">${t('today')}</span>` : ''}</h2>
+        <div class="jumps" role="group" aria-label="${t('jumpTo')}">
+          ${jumps.map(([k, h]) => `<button class="chip-btn" data-action="jump" data-h="${h}">${t(k)}</button>`).join('')}
+        </div>
+      </div>
+      <div class="station-row">
+        <div class="seg station-tabs" role="tablist">
+          ${H.STATIONS.map(st => {
+            const n = problemsOn(ui.day, st);
+            return `<button role="tab" data-action="station" data-st="${st}" aria-selected="${ui.station === st}">
+              <i class="sw ${st}"></i>${t(st)}${n ? `<span class="count-badge">${n}</span>` : ''}</button>`;
+          }).join('')}
+        </div>
+        <button class="icon-btn help-btn" data-action="help" aria-label="${t('whatsThis')}" title="${t('whatsThis')}">?</button>
+      </div>`;
   }
 
   // Empty app: a numbered path instead of an empty grid full of red.
@@ -224,9 +305,10 @@
         ${row(`<span class="chip front blocked">6h–14h</span>`, t('help_blocked'))}
         ${row(`<span class="chip front forced">6h–14h</span>`, t('help_forced'))}
         ${row(`<span class="chip front open">6h–14h</span>`, t('help_open'))}
-        ${row(`<span class="cov-sample short">2/3</span>`, t('help_short'))}
-        ${row(`<span class="cov-sample ok">3/3</span>`, t('help_ok'))}
-        ${row(`<span class="dot-sample"></span>`, t('help_dot'))}
+        ${row(`<span class="cov-sample short">−1</span>`, t('help_short'))}
+        ${row(`<span class="count-badge static">2</span>`, t('help_dot'))}
+        ${row(hoursInfo({ maxHours: 32, minHours: 0 }, 24), t('help_hours'))}
+        ${row(hoursInfo({ maxHours: 32, minHours: 24 }, 16), t('help_hoursUnder'))}
       </ul>
       <h3>${t('helpHow')}</h3>
       <ul class="plain how">${['how_1', 'how_2', 'how_3', 'how_4', 'how_5'].map(k => `<li>${t(k)}</li>`).join('')}</ul>
@@ -240,13 +322,13 @@
     return `<div class="banner">${t('backupReminder')} <button class="link" data-action="backup">${t('backupNow')}</button></div>`;
   }
 
+  // A number per day instead of a dot: a dot on every day stops meaning anything.
   function dayChips() {
-    const is = ui.issues;
     return `<div class="daychips" role="tablist">${t('daysShort').map((d, i) => {
-      const bad = is.gaps.some(g => Math.min(6, Math.floor(g.start / H.DAY)) === i)
-        || is.items.some(it => (it.kind === 'block' || it.kind === 'open') && it.shift.day === i);
-      return `<button role="tab" data-action="day" data-d="${i}" aria-selected="${ui.day === i}">
-        ${d}<b>${H.parseIso(H.addDays(ui.week, i)).getDate()}</b>${bad ? '<i class="dot" aria-label="!"></i>' : ''}</button>`;
+      const n = problemsOn(i);
+      return `<button role="tab" data-action="day" data-d="${i}" aria-selected="${ui.day === i}"
+        ${n ? `aria-label="${d} ${t('problemsN', { n })}"` : ''}>
+        ${d}<b>${H.parseIso(H.addDays(ui.week, i)).getDate()}</b>${n ? `<i class="count-badge">${n}</i>` : ''}</button>`;
     }).join('')}</div>`;
   }
 
@@ -282,39 +364,40 @@
 
     let html = `<div class="g-row g-head"><div class="g-name"></div><div class="g-track" style="width:${width}px">
       ${Array.from({ length: n }, (_, i) => `<span style="left:${i * HOUR_PX}px">${fmtT(ws + i * 60)}</span>`).join('')}</div></div>`;
-    const open = today.filter(s => !s.empId);
-    if (open.length) html += `<div class="g-section open">${t('openShifts')}</div>` + row(`<div class="g-name"><span>${t('open')}</span></div>`, open);
+    const st = ui.station;
+    html += coverageRow(st, d, ws, n, width);
+    const open = today.filter(s => !s.empId && s.station === st);
+    if (open.length) html += row(`<div class="g-name"><span class="open-label">${t('openShifts')}</span></div>`, open);
 
     const shown = new Set(state.employees.filter(e => matches(e.name, ui.search)).map(e => e.id));
     const weekAll = shiftsOf();
-    for (const st of H.STATIONS) {
-      const list = today.filter(s => s.empId && s.station === st);
-      html += `<div class="g-section ${st}">${t(st)}</div>` + coverageRow(st, d, ws, n, width);
-      const ids = [...new Set(list.map(s => s.empId))].filter(id => shown.has(id))
-        .sort((a, b) => empName(a).localeCompare(empName(b), 'fr'));
-      if (!ids.length) html += `<div class="g-empty">${ui.search ? t('noMatch') : t('nobody')}</div>`;
-      for (const id of ids) {
-        html += row(`<div class="g-name"><button class="link" data-action="edit-emp" data-id="${id}">${esc(empName(id))}</button>
-          <small>${fmtH(H.weekHours(weekAll, id))}</small></div>`, list.filter(s => s.empId === id));
-      }
+    const list = today.filter(s => s.empId && s.station === st);
+    const ids = [...new Set(list.map(s => s.empId))].filter(id => shown.has(id))
+      .sort((a, b) => empName(a).localeCompare(empName(b), 'fr'));
+    if (!ids.length) html += `<div class="g-empty">${ui.search ? t('noMatch') : t('nobody')}</div>`;
+    for (const id of ids) {
+      html += row(`<div class="g-name"><button class="link" data-action="edit-emp" data-id="${id}" title="${esc(empName(id))}">${esc(shortName(id))}</button>
+        ${hoursInfo(H.findEmp(state, id), H.weekHours(weekAll, id))}</div>`, list.filter(s => s.empId === id));
     }
-    return `<div class="gantt">${html}</div>
-      <button class="btn wide" data-action="add-shift" data-day="${d}">${t('addShiftDay', { day: t('days')[d] })}</button>`;
+    return `<div class="gantt ${st}" data-ws="${ws}">${html}</div>
+      <button class="btn wide" data-action="add-shift" data-day="${d}" data-station="${st}">${t(st === 'kitchen' ? 'addShiftKitchen' : 'addShiftFront')}</button>`;
   }
 
+  // Only the hours that are short of people are marked; the rest stays quiet.
   function coverageRow(st, d, ws, n, width) {
     const { need, cov } = ui.issues;
-    let cells = '';
+    let cells = '', anyShort = false;
     for (let i = 0; i < n; i++) {
       const a = (d * H.DAY + ws + i * 60) / H.SLOT;
       if (a + 1 >= H.SLOTS) break;
       const want = Math.max(need[st][a], need[st][a + 1]);
       const have = Math.min(cov[st][a], cov[st][a + 1]);
-      if (!want && !have) { cells += '<span></span>'; continue; }
-      const cls = have < want ? 'short' : have > want ? 'over' : 'ok';
-      cells += `<span class="${cls}" title="${t('covTitle', { have, want })}">${have}/${want}</span>`;
+      if (have >= want) { cells += '<span></span>'; continue; }
+      anyShort = true;
+      cells += `<span class="short" title="${t('covTitle', { have, want })}">−${want - have}</span>`;
     }
-    return `<div class="g-row cov"><div class="g-name"><small>${t('staffedNeeded')}</small></div>
+    return `<div class="g-row cov"><div class="g-name">${anyShort
+      ? `<small class="err">${t('missingRow')}</small>` : `<small class="ok">✓ ${t('covered')}</small>`}</div>
       <div class="g-track cov-cells" style="width:${width}px">${cells}</div></div>`;
   }
 
@@ -326,7 +409,7 @@
     const chip = s => `<button class="chip ${s.station} ${fl.get(s.id) || ''} ${s.empId ? '' : 'open'}" data-action="edit-shift" data-id="${s.id}">
       ${fmtRange(s.start, s.end)}${s.regular ? ' ↻' : ''}</button>`;
     const head = `<tr><th class="name">${t('team')}</th>
-      ${days.map((d, i) => `<th>${d} ${H.parseIso(H.addDays(ui.week, i)).getDate()}</th>`).join('')}<th>${t('total')}</th></tr>`;
+      ${days.map((d, i) => `<th>${d} ${H.parseIso(H.addDays(ui.week, i)).getDate()}</th>`).join('')}</tr>`;
     // Worst shortage per station per day, for the section headers.
     const missing = {};
     for (const g of ui.issues.gaps) {
@@ -343,15 +426,15 @@
         ${days.map((_, i) => {
           const m = missing[st + i];
           return `<td>${m ? `<span class="sec-bad">${t('missingN', { n: m })}</span>` : '<span class="sec-ok">✓</span>'}</td>`;
-        }).join('')}<td></td></tr>`;
+        }).join('')}</tr>`;
       const open = shifts.filter(s => !s.empId && s.station === st);
       if (open.length) {
         body += `<tr class="open-row"><th class="name">${t('openShifts')}</th>
-          ${days.map((_, i) => `<td>${open.filter(s => s.day === i).map(chip).join('')}</td>`).join('')}<td></td></tr>`;
+          ${days.map((_, i) => `<td>${open.filter(s => s.day === i).map(chip).join('')}</td>`).join('')}</tr>`;
       }
       for (const e of people) {
         const h = H.weekHours(shifts, e.id);
-        body += `<tr><th class="name"><button class="link" data-action="edit-emp" data-id="${e.id}">${esc(e.name)}</button></th>
+        body += `<tr><th class="name"><button class="link" data-action="edit-emp" data-id="${e.id}" title="${esc(e.name)}">${esc(shortName(e.id))}</button>${hoursInfo(e, h)}</th>
           ${days.map((_, i) => {
             const iso = H.addDays(ui.week, i);
             const off = e.timeOff.some(o => o.from <= iso && iso <= o.to);
@@ -362,15 +445,20 @@
               ${off ? `<span class="tag">${t('timeOffShort')}</span>` : ''}
               ${mine.map(chip).join('')}
               ${elsewhere ? `<span class="tag other">${t(other)}</span>` : !mine.length && !off && !na ? '<span class="plus" aria-hidden="true">+</span>' : ''}</td>`;
-          }).join('')}
-          <td class="tot ${h > e.maxHours ? 'bad' : ''}">${fmtH(h)}<small>/${e.maxHours}</small></td></tr>`;
+          }).join('')}</tr>`;
       }
-      if (!people.length) body += `<tr><td colspan="9" class="muted pad">${ui.search ? t('noMatch') : t('nobody')}</td></tr>`;
+      if (!people.length) body += `<tr><td colspan="8" class="muted pad">${ui.search ? t('noMatch') : t('nobody')}</td></tr>`;
     }
     return `<div class="wk-wrap"><table class="wk"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
   }
 
-  function updateBoard() { const b = $('#board'); if (b) b.innerHTML = board(); }
+  function updateBoard() {
+    const b = $('#board');
+    if (!b) return;
+    const prevLeft = ($('.gantt') || {}).scrollLeft;
+    b.innerHTML = board();
+    placeTimeline(prevLeft);
+  }
 
   function showSuggest() {
     const box = $('#suggest');
@@ -534,7 +622,7 @@
       + sec(t('gaps'), is.gaps.map(g => `<li class="err-li">${t('gapLine', {
           day: t('daysShort')[gapDay(g)], range: fmtRange(g.start, g.end), station: t(g.station), n: g.missing })}
         <div class="btns"><button class="btn small" data-action="gap-fill" data-start="${g.start}" data-end="${g.end}" data-station="${g.station}">${t('findSomeone')}</button>
-        <button class="btn small" data-action="goto-day" data-d="${gapDay(g)}">${t('seeDay')}</button></div></li>`).join(''))
+        <button class="btn small" data-action="goto-day" data-d="${gapDay(g)}" data-st="${g.station}" data-min="${g.start - gapDay(g) * H.DAY}">${t('seeDay')}</button></div></li>`).join(''))
       + sec(t('openShifts'), of('open').map(i => `<li>${when(i.shift)}
         <div class="btns"><button class="btn small" data-action="replace" data-id="${i.shift.id}">${t('findSomeone')}</button></div></li>`).join(''))
       + sec(t('forcedShifts'), of('forced').map(i => `<li><b>${esc(empName(i.shift.empId))}</b> · ${when(i.shift)}<div class="muted">${i.list.map(reason).join(' · ')}</div></li>`).join(''))
@@ -1035,7 +1123,24 @@
     assign: el => assign(el.dataset.id, el.dataset.emp),
     issues: openIssues,
     'gap-fill': fillGap,
-    'goto-day': el => { closeSheet(); ui.view = 'day'; ui.day = +el.dataset.d; render(); },
+    'goto-day': el => {
+      closeSheet();
+      ui.view = 'day';
+      ui.day = +el.dataset.d;
+      if (el.dataset.st) ui.station = el.dataset.st;
+      render();
+      if (el.dataset.min) scrollTimeline(+el.dataset.min);
+      $('.gantt')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    },
+    jump: el => scrollTimeline(+el.dataset.h * 60),
+    station: el => { ui.station = el.dataset.st; render(); },
+    'search-toggle': () => {
+      const open = !(ui.searchOpen || ui.search);
+      ui.searchOpen = open;
+      if (!open) ui.search = '';
+      render();
+      if (open) $('#search').focus();
+    },
     share: () => { closeSheet(); openShare(); },
     help: openHelp,
     'copy-week': copyLastWeek,
