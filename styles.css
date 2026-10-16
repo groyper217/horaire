@@ -146,23 +146,24 @@ main {
 .actions-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
 .actions-row .btn { padding: 0 6px; font-size: 14px; }
 
-/* week status: the first thing to read */
-.status {
-  width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
-  padding: 12px 14px; margin-bottom: 12px; text-align: left;
-  border: 1px solid var(--line); border-left-width: 5px; border-radius: var(--radius); background: var(--surface);
+/* "next step" card: the first thing to read, with the button to act */
+.next {
+  padding: 14px; margin-bottom: 12px;
+  border: 1px solid var(--line); border-top-width: 5px; border-radius: var(--radius); background: var(--surface);
 }
-.status b { font-size: 17px; }
-.status span { color: var(--muted); font-size: 14px; }
-.status ul { margin: 4px 0 2px; padding-left: 18px; }
-.status .go { color: var(--accent); font-weight: 600; margin-top: 2px; }
-.status.bad { border-left-color: var(--danger); }
-.status.bad b { color: var(--danger); }
-.status.meh { border-left-color: var(--warn); }
-.status.good { border-left-color: var(--ok); }
-.status.good b { color: var(--ok); }
-.status.neutral { border-left-color: var(--accent); }
-.status:active { background: var(--surface-2); }
+.next.neutral { border-top-color: var(--accent); }
+.next.bad { border-top-color: var(--danger); }
+.next.good { border-top-color: var(--ok); }
+.next-label { margin: 0 0 2px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.next h2 { font-size: 19px; margin-bottom: 6px; }
+.next.good h2 { color: var(--ok); }
+.next p { margin: 0 0 10px; }
+.next .next-first { font-size: 14px; color: var(--muted); margin-bottom: 4px; }
+.next-problem { padding: 10px 12px; margin-bottom: 10px; border-radius: 8px; background: var(--surface-2); line-height: 1.5; }
+.next .btn.big { margin-bottom: 0; }
+.next .link { justify-self: center; }
+.day-title { font-size: 18px; margin: 2px 2px 8px; }
+.today { font-size: 12px; font-weight: 700; color: var(--accent-fg); background: var(--accent); padding: 2px 8px; border-radius: 999px; vertical-align: 2px; }
 .notice { padding: 8px 12px; margin-bottom: 10px; border-radius: var(--radius); background: var(--surface-2); font-size: 14px; }
 .notice .link { padding: 0 0 0 4px; }
 .banner {
@@ -288,6 +289,13 @@ main {
 .wk td.tot { white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
 .wk td.tot small { color: var(--muted); font-weight: 400; }
 .wk td.tot.bad { color: var(--danger); }
+.wk tr.sec th, .wk tr.sec td { padding: 10px 6px 6px; font-weight: 700; border-top: 2px solid var(--line); }
+.wk tr.sec.kitchen th, .wk tr.sec.kitchen td { background: var(--k-bg); color: var(--k-fg); }
+.wk tr.sec.front th, .wk tr.sec.front td { background: var(--f-bg); color: var(--f-fg); }
+.wk tr.sec small { font-weight: 400; }
+.sec-ok { color: var(--ok); }
+.sec-bad { display: inline-block; font-size: 12px; padding: 1px 6px; border-radius: 999px; background: var(--danger); color: #fff; }
+.tag.other { color: var(--muted); font-weight: 600; }
 .wk .open-row th, .wk .open-row td { background: color-mix(in srgb, var(--danger) 6%, var(--surface)); }
 .chip {
   display: block; width: 100%; margin: 2px 0; padding: 4px 6px; border: 1px solid; border-radius: 6px;

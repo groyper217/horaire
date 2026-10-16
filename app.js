@@ -17,7 +17,7 @@
     tab: 'schedule',
     week: H.mondayOf(now),
     day: (now.getDay() + 6) % 7,
-    view: matchMedia('(min-width: 900px)').matches ? 'week' : 'day',
+    view: 'day',   // always open on today's day view
     search: '',
     teamSearch: '',
     undo: null,
@@ -117,8 +117,7 @@
     const otherWeek = ui.week !== H.mondayOf(new Date());
     return `
       ${otherWeek ? `<div class="notice">${t('otherWeek')} <button class="link" data-action="week-today">${t('backToThisWeek')}</button></div>` : ''}
-      ${statusCard()}
-      <button class="btn primary big" data-action="generate">${hasShifts ? t('generateFill') : t('generate')}</button>
+      ${nextStepCard()}
       <div class="actions-row">
         <button class="btn" data-action="add-shift">${t('addShift')}</button>
         <button class="btn" data-action="copy-week">${t('copyLastWeekShort')}</button>
@@ -135,7 +134,7 @@
           <ul id="suggest" class="suggest" hidden></ul>
         </div>
       </div>
-      ${ui.view === 'day' ? dayChips() : ''}
+      ${ui.view === 'day' ? dayChips() + dayTitle() : ''}
       <div class="legend-row">
         <span><i class="sw kitchen"></i>${t('kitchen')}</span><span><i class="sw front"></i>${t('front')}</span>
         <button class="link" data-action="help">${t('whatsThis')}</button>
@@ -146,26 +145,55 @@
       ${hasShifts ? `<p class="center"><button class="link danger" data-action="clear-week">${t('clearWeek')}</button></p>` : ''}`;
   }
 
-  // Plain-language summary of the week, big enough to be the first thing read.
-  function statusCard() {
+  const whenOf = sh => `${t('days')[sh.day]} ${fmtRange(sh.start, sh.end)} · ${t(sh.station)}`;
+  const gapDayOf = g => Math.min(6, Math.floor(g.start / H.DAY));
+
+  // "What do I do now?" — one card, one clear step, with the button to do it.
+  // Problems are shown one at a time, earliest first, instead of as a count.
+  function nextStepCard() {
+    const card = (kind, title, body, buttons) => `<section class="next ${kind}">
+      <p class="next-label">${t('ns_label')}</p><h2>${title}</h2>${body}<div class="stack">${buttons}</div></section>`;
+
     if (!shiftsOf().length) {
-      return `<div class="status neutral"><b>${t('st_emptyTitle')}</b><span>${t('st_emptyBody')}</span></div>`;
+      return card('neutral', t('ns_emptyTitle'), `<p>${t('ns_emptyBody')}</p>`,
+        `<button class="btn primary big" data-action="generate">${t('generate')}</button>`);
     }
     const is = ui.issues;
-    const count = k => is.items.filter(i => i.kind === k).length;
-    const lines = [];
-    if (count('block')) lines.push(t('st_conflicts', { n: count('block') }));
-    if (is.gaps.length) lines.push(t('st_gaps', { n: is.gaps.length }));
-    if (count('open')) lines.push(t('st_open', { n: count('open') }));
-    const bad = lines.length > 0;
-    if (count('warn')) lines.push(t('st_warns', { n: count('warn') }));
-    if (!lines.length) {
-      return `<button class="status good" data-action="issues"><b>${t('st_goodTitle')}</b><span>${t('st_goodBody')}</span></button>`;
+    const byTime = (a, b) => a.shift.day - b.shift.day || a.shift.start - b.shift.start;
+    const blocks = is.items.filter(i => i.kind === 'block').sort(byTime);
+    const open = is.items.filter(i => i.kind === 'open').sort(byTime);
+    const total = blocks.length + open.length + is.gaps.length;
+
+    if (!total) {
+      return card('good', t('ns_doneTitle'), `<p>${t('ns_doneBody')}</p>`,
+        `<button class="btn primary big" data-action="share">${t('shareSchedule')}</button>
+         <button class="link" data-action="week" data-d="7">${t('ns_nextWeek')} ›</button>`);
     }
-    return `<button class="status ${bad ? 'bad' : 'meh'}" data-action="issues">
-      <b>${bad ? t('st_badTitle') : t('st_warnTitle')}</b>
-      <ul>${lines.map(l => `<li>${l}</li>`).join('')}</ul>
-      <span class="go">${t('st_seeFix')} ›</span></button>`;
+
+    let problem, buttons;
+    if (blocks.length) {
+      const b = blocks[0];
+      problem = `<b>${esc(empName(b.shift.empId))}</b> · ${whenOf(b.shift)}<br><span class="err">${b.list.map(reason).join(' · ')}</span>`;
+      buttons = `<button class="btn primary" data-action="replace" data-id="${b.shift.id}">${t('replaceSomeone')}</button>
+        <button class="btn" data-action="edit-shift" data-id="${b.shift.id}">${t('edit')}</button>`;
+    } else if (open.length) {
+      problem = `${t('ns_openShift')} <b>${whenOf(open[0].shift)}</b>`;
+      buttons = `<button class="btn primary" data-action="replace" data-id="${open[0].shift.id}">${t('findSomeone')}</button>`;
+    } else {
+      const g = is.gaps[0];
+      problem = t('ns_gap', { day: t('days')[gapDayOf(g)], range: fmtRange(g.start, g.end), station: t(g.station), n: g.missing });
+      buttons = `<button class="btn primary" data-action="gap-fill" data-start="${g.start}" data-end="${g.end}" data-station="${g.station}">${t('findSomeone')}</button>
+        <button class="btn" data-action="goto-day" data-d="${gapDayOf(g)}">${t('seeDay')}</button>`;
+    }
+    return card('bad', t('ns_fixTitle', { n: total }),
+      `<p class="next-first">${t('ns_first')}</p><div class="next-problem">${problem}</div>`,
+      buttons + (total > 1 ? `<button class="link" data-action="issues">${t('ns_seeAll', { n: total })} ›</button>` : ''));
+  }
+
+  function dayTitle() {
+    const iso = H.addDays(ui.week, ui.day);
+    const isToday = iso === H.isoOf(new Date());
+    return `<h2 class="day-title">${t('days')[ui.day]} ${fmtDate(iso, { day: 'numeric', month: 'long' })}${isToday ? ` <span class="today">${t('today')}</span>` : ''}</h2>`;
   }
 
   // Empty app: a numbered path instead of an empty grid full of red.
@@ -297,29 +325,48 @@
     const days = t('daysShort');
     const chip = s => `<button class="chip ${s.station} ${fl.get(s.id) || ''} ${s.empId ? '' : 'open'}" data-action="edit-shift" data-id="${s.id}">
       ${fmtRange(s.start, s.end)}${s.regular ? ' ↻' : ''}</button>`;
-    const head = `<tr><th class="name">${t('team')} (${emps.length})</th>
+    const head = `<tr><th class="name">${t('team')}</th>
       ${days.map((d, i) => `<th>${d} ${H.parseIso(H.addDays(ui.week, i)).getDate()}</th>`).join('')}<th>${t('total')}</th></tr>`;
+    // Worst shortage per station per day, for the section headers.
+    const missing = {};
+    for (const g of ui.issues.gaps) {
+      const k = g.station + gapDayOf(g);
+      missing[k] = Math.max(missing[k] || 0, g.missing);
+    }
     let body = '';
-    const open = shifts.filter(s => !s.empId);
-    if (open.length) {
-      body += `<tr class="open-row"><th class="name">${t('openShifts')}</th>
-        ${days.map((_, i) => `<td>${open.filter(s => s.day === i).map(chip).join('')}</td>`).join('')}<td></td></tr>`;
-    }
-    for (const e of emps) {
-      const h = H.weekHours(shifts, e.id);
-      body += `<tr><th class="name"><button class="link" data-action="edit-emp" data-id="${e.id}">${esc(e.name)}</button></th>
+    // One section per station; someone trained on both appears in both,
+    // and each section only shows that station's shifts.
+    for (const st of H.STATIONS) {
+      const other = H.STATIONS.find(x => x !== st);
+      const people = emps.filter(e => e.stations.includes(st) || shifts.some(s => s.empId === e.id && s.station === st));
+      body += `<tr class="sec ${st}"><th class="name">${t(st)} <small>(${people.length})</small></th>
         ${days.map((_, i) => {
-          const iso = H.addDays(ui.week, i);
-          const off = e.timeOff.some(o => o.from <= iso && iso <= o.to);
-          const na = !e.availability[i].length;
-          const mine = shifts.filter(s => s.empId === e.id && s.day === i);
-          return `<td class="cell ${off ? 'off' : na ? 'na' : ''}" data-action="add-shift" data-emp="${e.id}" data-day="${i}">
-            ${off ? `<span class="tag">${t('timeOffShort')}</span>` : ''}
-            ${mine.map(chip).join('')}${!mine.length && !off && !na ? '<span class="plus" aria-hidden="true">+</span>' : ''}</td>`;
-        }).join('')}
-        <td class="tot ${h > e.maxHours ? 'bad' : ''}">${fmtH(h)}<small>/${e.maxHours}</small></td></tr>`;
+          const m = missing[st + i];
+          return `<td>${m ? `<span class="sec-bad">${t('missingN', { n: m })}</span>` : '<span class="sec-ok">✓</span>'}</td>`;
+        }).join('')}<td></td></tr>`;
+      const open = shifts.filter(s => !s.empId && s.station === st);
+      if (open.length) {
+        body += `<tr class="open-row"><th class="name">${t('openShifts')}</th>
+          ${days.map((_, i) => `<td>${open.filter(s => s.day === i).map(chip).join('')}</td>`).join('')}<td></td></tr>`;
+      }
+      for (const e of people) {
+        const h = H.weekHours(shifts, e.id);
+        body += `<tr><th class="name"><button class="link" data-action="edit-emp" data-id="${e.id}">${esc(e.name)}</button></th>
+          ${days.map((_, i) => {
+            const iso = H.addDays(ui.week, i);
+            const off = e.timeOff.some(o => o.from <= iso && iso <= o.to);
+            const na = !e.availability[i].length;
+            const mine = shifts.filter(s => s.empId === e.id && s.day === i && s.station === st);
+            const elsewhere = shifts.some(s => s.empId === e.id && s.day === i && s.station === other);
+            return `<td class="cell ${off ? 'off' : na ? 'na' : ''}" data-action="add-shift" data-emp="${e.id}" data-day="${i}" data-station="${st}">
+              ${off ? `<span class="tag">${t('timeOffShort')}</span>` : ''}
+              ${mine.map(chip).join('')}
+              ${elsewhere ? `<span class="tag other">${t(other)}</span>` : !mine.length && !off && !na ? '<span class="plus" aria-hidden="true">+</span>' : ''}</td>`;
+          }).join('')}
+          <td class="tot ${h > e.maxHours ? 'bad' : ''}">${fmtH(h)}<small>/${e.maxHours}</small></td></tr>`;
+      }
+      if (!people.length) body += `<tr><td colspan="9" class="muted pad">${ui.search ? t('noMatch') : t('nobody')}</td></tr>`;
     }
-    if (!emps.length) body += `<tr><td colspan="9" class="muted pad">${ui.search ? t('noMatch') : t('noTeamYet')}</td></tr>`;
     return `<div class="wk-wrap"><table class="wk"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
   }
 
@@ -961,7 +1008,9 @@
     day: el => { ui.day = +el.dataset.d; render(); },
     generate: onGenerate,
     'gen-run': el => { closeSheet(); runGenerate(el.dataset.mode); },
-    'add-shift': el => openShiftEditor({ empId: el.dataset.emp, day: el.dataset.day != null ? +el.dataset.day : ui.day }),
+    'add-shift': el => openShiftEditor({
+      empId: el.dataset.emp, day: el.dataset.day != null ? +el.dataset.day : ui.day, station: el.dataset.station,
+    }),
     'edit-shift': el => openShiftEditor({ id: el.dataset.id }),
     tpl: el => {
       const f = $('#shift-form').elements;
